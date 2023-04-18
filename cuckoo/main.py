@@ -17,7 +17,7 @@ from cuckoo.apps import (
     fetch_community, submit_tasks, process_tasks, process_task_range,
     cuckoo_rooter, cuckoo_api, cuckoo_distributed, cuckoo_distributed_instance,
     cuckoo_clean, cuckoo_dnsserve, cuckoo_machine, import_cuckoo,
-    migrate_database, migrate_cwd, cleanup_rooter
+    migrate_database, migrate_cwd, cleanup_rooter, cuckoo_orchestrator
 )
 from cuckoo.common.config import read_kv_conf
 from cuckoo.common.exceptions import CuckooCriticalError
@@ -488,6 +488,16 @@ def rooter(ctx, socket, group, service, iptables, ip, sudo):
         except KeyboardInterrupt:
             print(red("Aborting the Cuckoo Rooter.."))
             cleanup_rooter()
+
+
+@main.command()
+@click.pass_context
+def orchestrator(ctx):
+    """Instantiate the Cuckoo Orchestrator."""
+    init_console_logging(level=ctx.parent.level)
+
+    cuckoo_orchestrator()
+
 
 @main.command()
 @click.option("-H", "--host", default="localhost", help="Host to bind the API server on")
