@@ -28,7 +28,8 @@ class Orchestrator:
             'ip': "192.168.56.129",
             'identifier': "host1",
             'venv': '/home/cuckoo/.virtualenvs/cuckoo-development/bin/activate',
-            'user': 'cuckoo'
+            'user': 'cuckoo',
+            'cwd': '/home/cuckoo/.cuckoo'
             }]
         self.busy_cuckoo_hosts = []
         self.lock = Lock()
@@ -75,26 +76,36 @@ class Orchestrator:
 
     def submit_to_host(self):
         # TODO: Getting a list of files for submission
-        # TODO: transferring files to remote host
+        
+        filepath = "/home/cuckoo/"
+        filename = "test.sh"
 
-        filename = "/home/cuckoo/test.sh"
         while not self.terminated.is_set():
             if len(self.free_cuckoo_hosts) > 0 :
                 
                 host = self.use_host()
-                command = "ssh " + host['user'] + "@" + host['ip'] +" \""
+
+                # Transfer file to host
+                client = host['user'] + "@" + host['ip']
+                p = subprocess.Popen(["scp", filepath+filename, client+":/tmp/"])
+                os.waitpid(p.pid, 0)
+
+                # Run the cuckoo submit command
+                command = "ssh " + client +" \""
                 
-                # if venv is set on host
+                # if venv is used on host
                 if host['venv'] != "":
                     command += "source "+host['venv']+" && "
             
-                command += "cuckoo submit "+filename+ "\""
+                command += "cuckoo submit /tmp/"+filename+ "\""
 
                 ret = subprocess.check_output(command, shell=True)
                 submitted_id = ret.split()[-1][1:]
+
                 print "New job submitted on :" + host['ip']
                 # print ret
                 print "Job ID on remote Host: " + ret.split()[-1][1:]
+
             else:
                 sleep(5)
 
@@ -122,4 +133,7 @@ def cuckoo_orchestrator(host="192.168.56.128",port=8888):
         print(e)
 
 
-
+# def cuckoo_orchestrator_submit(target):
+#     files = []
+#         for path in target:
+#             files.extend(enumerate_files(os.path.abspath(path), pattern))
