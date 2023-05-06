@@ -417,6 +417,57 @@ class AlembicVersion(Base):
 
     version_num = Column(String(32), nullable=False, primary_key=True)
 
+class OrchestratorSample(Base):
+    """Submitted files details."""
+    __tablename__ = "OrchestratorSamples"
+
+    id = Column(Integer(), primary_key=True)
+    target = Column(Text(), nullable=False)
+    file_size = Column(Integer(), nullable=False)
+    file_type = Column(Text(), nullable=False)
+    md5 = Column(String(32), nullable=False)
+    crc32 = Column(String(8), nullable=False)
+    sha1 = Column(String(40), nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    sha512 = Column(String(128), nullable=False)
+    ssdeep = Column(String(255), nullable=True)
+    status = Column(status_type, server_default=TASK_PENDING, nullable=False)
+    # assigned_to = Column(String(255), nullable=True)
+
+    # TODO: Check relevance
+    # __table_args__ = Index("hash_index_2", "md5", "crc32", "sha1", "sha256", "sha512", unique=True)
+
+    def __repr__(self):
+        return "<Sample('{0}','{1}','{2}')>".format(self.id, self.target, self.sha256)
+
+    def to_dict(self):
+        """Convert object to dict.
+        @return: dict
+        """
+        d = {}
+        for column in self.__table__.columns:
+            d[column.name] = getattr(self, column.name)
+        return d
+
+    def to_json(self):
+        """Convert object to JSON.
+        @return: JSON data
+        """
+        return json.dumps(self.to_dict())
+
+    def __init__(self, target, md5, crc32, sha1, sha256, sha512,
+                 file_size, file_type, ssdeep):
+        self.target = target
+        self.md5 = md5
+        self.sha1 = sha1
+        self.crc32 = crc32
+        self.sha256 = sha256
+        self.sha512 = sha512
+        self.file_size = file_size
+        self.file_type = file_type
+        self.ssdeep = ssdeep
+
+
 class Database(object):
     """Analysis queue database.
 
@@ -653,6 +704,35 @@ class Database(object):
             session.rollback()
         finally:
             session.close()
+    
+    @classlock
+    def orchestrator_set_status(self, task_id, status):
+        """Set task status.
+        @param task_id: task identifier
+        @param status: status string
+        @return: operation status
+        """
+        session = self.Session()
+        try:
+            row = session.query(OrchestratorSample).get(task_id)
+            if not row:
+                return
+
+            row.status = status
+
+            # TODO: Check relevance
+
+            # if status == TASK_RUNNING:
+            #     row.started_on = datetime.datetime.now()
+            # elif status == TASK_COMPLETED:
+            #     row.completed_on = datetime.datetime.now()
+
+            session.commit()
+        except SQLAlchemyError as e:
+            log.exception("Database error setting status: {0}".format(e))
+            session.rollback()
+        finally:
+            session.close()
 
     @classlock
     def set_route(self, task_id, route):
@@ -692,7 +772,31 @@ class Database(object):
 
             row = q.order_by(Task.priority.desc(), Task.added_on).first()
             if row:
-                self.set_status(task_id=row.id, status=TASK_RUNNING)
+                self.orchestraset_status(task_id=row.id, status=TASK_RUNNING)
+                session.refresh(row)
+
+            return row
+        except SQLAlchemyError as e:
+            log.exception("Database error fetching task: {0}".format(e))
+            session.rollback()
+        finally:
+            session.close()
+
+    @classlock
+    def orchestrator_fetch(self, machine=None, service=True):
+        """Fetch a task waiting to be processed and lock it for running.
+        @return: None or task
+        """
+        session = self.Session()
+        try:
+            q = session.query(OrchestratorSample).filter_by(status=TASK_PENDING)
+            # q = session.query(OrchestratorSample)
+
+            row = q.order_by(OrchestratorSample.id).first()
+            print row
+
+            if row:
+                self.orchestrator_set_status(task_id=row.id, status=TASK_RUNNING)
                 session.refresh(row)
 
             return row
@@ -1137,6 +1241,79 @@ class Database(object):
 
         return task_id
 
+    def orchestrator_add(self, obj, timeout=0, package="", options="", priority=1,
+            custom="", owner="", machine="", platform="", tags=None,
+            memory=False, enforce_timeout=False, clock=None, category=None,
+            submit_id=None):
+        """Add a task to database.
+        @param obj: object to add (File or URL).
+        @param timeout: selected timeout.
+        @param options: analysis options.
+        @param priority: analysis priority.
+        @param custom: custom options.
+        @param owner: task owner.
+        @param machine: selected machine.
+        @param platform: platform.
+        @param tags: optional tags that must be set for machine selection
+        @param memory: toggle full memory dump.
+        @param enforce_timeout: toggle full timeout execution.
+        @param clock: virtual machine clock time
+        @return: cursor or None.
+        """
+        # TODO: parameter `package` is not mentioned in the function docstring
+        session = self.Session()
+
+        # Convert empty strings and None values to a valid int
+        if not timeout:
+            timeout = 0
+        if not priority:
+            priority = 1
+
+        try:
+            memory = parse_bool(memory)
+        except ValueError:
+            memory = False
+
+        try:
+            enforce_timeout = parse_bool(enforce_timeout)
+        except ValueError:
+            enforce_timeout = False
+
+        sample = OrchestratorSample(
+                        target=obj.file_path,
+                        md5=obj.get_md5(),
+                        crc32=obj.get_crc32(),
+                        sha1=obj.get_sha1(),
+                        sha256=obj.get_sha256(),
+                        sha512=obj.get_sha512(),
+                        file_size=obj.get_size(),
+                        file_type=obj.get_type(),
+                        ssdeep=obj.get_ssdeep())
+        session.add(sample)
+        sample_id = 2
+        try:
+            session.commit()
+            sample_id = sample.id
+        except IntegrityError:
+            session.rollback()
+            try:
+                sample = session.query(Sample).filter_by(md5=obj.get_md5()).first()
+            except SQLAlchemyError as e:
+                log.exception(
+                    "Error querying sample for hash: {0}".format(e)
+                )
+                session.close()
+                return None
+        except SQLAlchemyError as e:
+            log.exception("Database error adding task: {0}".format(e))
+            session.close()
+            return None
+        finally:
+            session.close()
+
+        # TODO: Check if orchestrator tasks needs to be tracked for the POC
+        return sample_id
+
     def add_path(self, file_path, timeout=0, package="", options="",
                  priority=1, custom="", owner="", machine="", platform="",
                  tags=None, memory=False, enforce_timeout=False, clock=None,
@@ -1167,6 +1344,40 @@ class Database(object):
             priority = 1
 
         return self.add(File(file_path), timeout, package, options, priority,
+                        custom, owner, machine, platform, tags, memory,
+                        enforce_timeout, clock, "file", submit_id)
+
+    
+    def orchestrator_add_path(self, file_path, timeout=0, package="", options="",
+                 priority=1, custom="", owner="", machine="", platform="",
+                 tags=None, memory=False, enforce_timeout=False, clock=None,
+                 submit_id=None):
+        """Add a task to database from file path.
+        @param file_path: sample path.
+        @param timeout: selected timeout.
+        @param options: analysis options.
+        @param priority: analysis priority.
+        @param custom: custom options.
+        @param owner: task owner.
+        @param machine: selected machine.
+        @param platform: platform.
+        @param tags: Tags required in machine selection
+        @param memory: toggle full memory dump.
+        @param enforce_timeout: toggle full timeout execution.
+        @param clock: virtual machine clock time
+        @return: cursor or None.
+        """
+        if not file_path or not os.path.exists(file_path):
+            log.warning("File does not exist: %s.", file_path)
+            return None
+
+        # Convert empty strings and None values to a valid int
+        if not timeout:
+            timeout = 0
+        if not priority:
+            priority = 1
+
+        return self.orchestrator_add(File(file_path), timeout, package, options, priority,
                         custom, owner, machine, platform, tags, memory,
                         enforce_timeout, clock, "file", submit_id)
 

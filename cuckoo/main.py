@@ -17,7 +17,7 @@ from cuckoo.apps import (
     fetch_community, submit_tasks, process_tasks, process_task_range,
     cuckoo_rooter, cuckoo_api, cuckoo_distributed, cuckoo_distributed_instance,
     cuckoo_clean, cuckoo_dnsserve, cuckoo_machine, import_cuckoo,
-    migrate_database, migrate_cwd, cleanup_rooter, cuckoo_orchestrator
+    migrate_database, migrate_cwd, cleanup_rooter, cuckoo_orchestrator, cuckoo_orchestrator_submit
 )
 from cuckoo.common.config import read_kv_conf
 from cuckoo.common.exceptions import CuckooCriticalError
@@ -495,9 +495,29 @@ def rooter(ctx, socket, group, service, iptables, ip, sudo):
 def orchestrator(ctx):
     """Instantiate the Cuckoo Orchestrator."""
     init_console_logging(level=ctx.parent.level)
+    Database().connect()
 
     cuckoo_orchestrator()
 
+
+@main.command()
+@click.argument("target", nargs=-1)
+@click.pass_context
+def orchestrator_submit(ctx, target):
+    """Submit one or more files to Cuckoo Orchestrator."""
+    init_console_logging(level=ctx.parent.level)
+    Database().connect()
+
+    try:
+        l = cuckoo_orchestrator_submit(
+            target)
+
+        for target, task_id in l:
+            print "%s: \"%s\" added to orchestrator with ID #%s" % (
+                bold(green("Success")), target, task_id
+            )
+    except KeyboardInterrupt:
+        print(red("Aborting submission of samples.."))
 
 @main.command()
 @click.option("-H", "--host", default="localhost", help="Host to bind the API server on")

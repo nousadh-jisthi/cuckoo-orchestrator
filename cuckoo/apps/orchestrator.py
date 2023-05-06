@@ -20,6 +20,18 @@ from threading import Thread, Lock, Event
 from cuckoo.common.colors import red
 from cuckoo.misc import version as __version__
 
+from .apps import enumerate_files
+
+from cuckoo.common.exceptions import (
+    CuckooOperationalError, CuckooDatabaseError, CuckooDependencyError
+)
+from cuckoo.common.mongo import mongo
+from cuckoo.common.objects import Dictionary, File
+from cuckoo.common.utils import to_unicode
+from cuckoo.core.database import (
+    Database, TASK_FAILED_PROCESSING, TASK_REPORTED
+)
+
 log = logging.getLogger(__name__)
 
 class Orchestrator:
@@ -76,35 +88,42 @@ class Orchestrator:
 
     def submit_to_host(self):
         # TODO: Getting a list of files for submission
-        
-        filepath = "/home/cuckoo/"
-        filename = "test.sh"
+        db = Database()
 
         while not self.terminated.is_set():
             if len(self.free_cuckoo_hosts) > 0 :
                 
-                host = self.use_host()
+                sample = db.orchestrator_fetch()
 
-                # Transfer file to host
-                client = host['user'] + "@" + host['ip']
-                p = subprocess.Popen(["scp", filepath+filename, client+":/tmp/"])
-                os.waitpid(p.pid, 0)
+                if sample:
+                    filename = sample.target.split("/")[-1]   # last item on target is filename
 
-                # Run the cuckoo submit command
-                command = "ssh " + client +" \""
+                    host = self.use_host()
+
+
+                    # Transfer file to host
+                    client = host['user'] + "@" + host['ip']
+                    p = subprocess.Popen(["scp", sample.target, client+":/tmp/"])
+                    os.waitpid(p.pid, 0)
+
+                    # Run the cuckoo submit command
+                    command = "ssh " + client +" \""
+                    
+                    # if venv is used on host
+                    if host['venv'] != "":
+                        command += "source "+host['venv']+" && "
                 
-                # if venv is used on host
-                if host['venv'] != "":
-                    command += "source "+host['venv']+" && "
-            
-                command += "cuckoo submit /tmp/"+filename+ "\""
+                    command += "cuckoo submit /tmp/"+filename+ "\""
 
-                ret = subprocess.check_output(command, shell=True)
-                submitted_id = ret.split()[-1][1:]
+                    ret = subprocess.check_output(command, shell=True)
+                    submitted_id = ret.split()[-1][1:]
 
-                print "New job submitted on :" + host['ip']
-                # print ret
-                print "Job ID on remote Host: " + ret.split()[-1][1:]
+                    print "New job submitted on :" + host['ip']
+                    # print ret
+                    print "Job ID on remote Host: " + ret.split()[-1][1:]
+                
+                else:
+                    sleep(5)
 
             else:
                 sleep(5)
@@ -133,7 +152,25 @@ def cuckoo_orchestrator(host="192.168.56.128",port=8888):
         print(e)
 
 
-# def cuckoo_orchestrator_submit(target):
-#     files = []
-#         for path in target:
-#             files.extend(enumerate_files(os.path.abspath(path), pattern))
+def cuckoo_orchestrator_submit(target):
+    # Some of this code was copied over from submit_tasks
+
+    # TODO: Connect with database?
+    db = Database()
+
+    files = []
+    for path in target:
+        files.extend(enumerate_files(os.path.abspath(path), pattern=''))
+    
+    for filepath in files:
+        if not os.path.getsize(filepath):
+            print "%s: sample %s (skipping file)" % (
+                bold(yellow("Empty")), filepath
+            )
+            continue
+
+        else:
+            sample_id = db.orchestrator_add_path(file_path=filepath)
+            # TODO: keep track of file ids
+            yield filepath, sample_id
+
