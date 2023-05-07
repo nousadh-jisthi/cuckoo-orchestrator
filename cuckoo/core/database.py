@@ -432,6 +432,8 @@ class OrchestratorSample(Base):
     sha512 = Column(String(128), nullable=False)
     ssdeep = Column(String(255), nullable=True)
     status = Column(status_type, server_default=TASK_PENDING, nullable=False)
+    assigned_to = Column(String(255), nullable=True)
+    remote_job_id = Column(Integer(), nullable=True)
     # assigned_to = Column(String(255), nullable=True)
 
     # TODO: Check relevance
@@ -706,7 +708,7 @@ class Database(object):
             session.close()
     
     @classlock
-    def orchestrator_set_status(self, task_id, status):
+    def orchestrator_update(self, sample_id, status=None, assigned_to=None, remote_job_id=None):
         """Set task status.
         @param task_id: task identifier
         @param status: status string
@@ -714,11 +716,18 @@ class Database(object):
         """
         session = self.Session()
         try:
-            row = session.query(OrchestratorSample).get(task_id)
+            row = session.query(OrchestratorSample).get(sample_id)
             if not row:
                 return
 
-            row.status = status
+            if status:
+                row.status = status
+
+            if assigned_to:
+                row.assigned_to = assigned_to
+            
+            if remote_job_id:
+                row.remote_job_id = remote_job_id
 
             # TODO: Check relevance
 
@@ -772,7 +781,7 @@ class Database(object):
 
             row = q.order_by(Task.priority.desc(), Task.added_on).first()
             if row:
-                self.orchestraset_status(task_id=row.id, status=TASK_RUNNING)
+                self.set_status(task_id=row.id, status=TASK_RUNNING)
                 session.refresh(row)
 
             return row
@@ -783,7 +792,7 @@ class Database(object):
             session.close()
 
     @classlock
-    def orchestrator_fetch(self, machine=None, service=True):
+    def orchestrator_fetch(self):
         """Fetch a task waiting to be processed and lock it for running.
         @return: None or task
         """
@@ -793,10 +802,35 @@ class Database(object):
             # q = session.query(OrchestratorSample)
 
             row = q.order_by(OrchestratorSample.id).first()
-            print row
+            # print row
 
             if row:
-                self.orchestrator_set_status(task_id=row.id, status=TASK_RUNNING)
+                self.orchestrator_update(sample_id=row.id, status=TASK_RUNNING)
+                session.refresh(row)
+
+            return row
+        except SQLAlchemyError as e:
+            log.exception("Database error fetching task: {0}".format(e))
+            session.rollback()
+        finally:
+            session.close()
+
+
+    @classlock
+    def orchestrator_complete(self, assigned_to, remote_job_id):
+        """Fetch a task waiting to be processed and lock it for running.
+        @return: None or task
+        """
+        session = self.Session()
+        try:
+            q = session.query(OrchestratorSample).filter_by(assigned_to=assigned_to)
+            q = q.filter_by(remote_job_id=remote_job_id)
+            row = q.first()
+
+            # print row
+
+            if row:
+                self.orchestrator_update(sample_id=row.id,status=TASK_COMPLETED)
                 session.refresh(row)
 
             return row

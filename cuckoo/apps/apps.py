@@ -404,6 +404,7 @@ def cuckoo_clean():
         cwd("storage", "analyses"),
         cwd("storage", "baseline"),
         cwd("storage", "binaries"),
+        cwd("storage", "orchestrator")
     ]
 
     # Delete the various files and directories. In case of directories, keep
