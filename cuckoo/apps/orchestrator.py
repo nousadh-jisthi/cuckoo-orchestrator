@@ -37,13 +37,11 @@ log = logging.getLogger(__name__)
 
 class Orchestrator:
     def __init__(self):
-        self.free_cuckoo_hosts = [{
-            'ip': "192.168.56.129",
-            'identifier': "host1",
-            'venv': '/home/cuckoo/.virtualenvs/cuckoo-development/bin/activate',
-            'user': 'cuckoo',
-            'cwd': '/home/cuckoo/.cuckoo/'
-            }]
+        path = cwd("conf", "orchestrator.conf")
+        f = open(path, "r")
+        self.free_cuckoo_hosts = json.loads(f.read())
+        f.close()
+
         self.busy_cuckoo_hosts = []
         self.lock = Lock()
         self.terminated = Event()
@@ -162,6 +160,20 @@ def cuckoo_orchestrator(host="192.168.56.128",port=8888):
         if not os.path.isdir(path):
             mkdir(path)
 
+        # checking if orchestrator conf exists, if not creates sample conf
+        path = cwd("conf", "orchestrator.conf")
+        if not os.path.isfile(path):
+            sampleJson = [{
+            'ip': "192.168.56.129",
+            'identifier': "host1",
+            'venv': '/home/cuckoo/.virtualenvs/cuckoo-development/bin/activate',
+            'user': 'cuckoo',
+            'cwd': '/home/cuckoo/.cuckoo/'
+            }]
+            sampleJsonString = json.dumps(sampleJson, indent=2)
+            f = open(path, "w")
+            f.write(sampleJsonString)
+        
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.bind((host, port))
         s.listen(10)
